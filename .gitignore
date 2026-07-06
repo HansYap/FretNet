@@ -1,0 +1,56 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# ── Virtual environment ───────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+
+# ── Jupyter / Colab notebooks (keep .ipynb out of the main repo) ───────────────
+*.ipynb
+.ipynb_checkpoints/
+
+# ── Dataset files (too large for git, lives on disk / Drive) ──────────────────
+data/
+datasets/
+mir_datasets/
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.aac
+
+# ── Processed features (regenerate from source, don't commit) ─────────────────
+*.npy
+*.npz
+*.pt
+*.pth
+
+# ── Model checkpoints and exports ─────────────────────────────────────────────
+checkpoints/
+runs/
+*.onnx
+*.ckpt
+*.bin
+
+# ── Weights & Biases ──────────────────────────────────────────────────────────
+wandb/
+
+# ── VS Code ───────────────────────────────────────────────────────────────────
+.vscode/
+
+# ── macOS (just in case) ──────────────────────────────────────────────────────
+.DS_Store
+
+# ── Environment variables (never commit secrets) ──────────────────────────────
+.env
+*.env
