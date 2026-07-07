@@ -1,9 +1,9 @@
 import os
+import csv
 import copy
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-import wandb
 
 from model import CRNN
 from dataset_setup import get_train_val_datasets
@@ -47,7 +47,7 @@ def run_epoch(model, loader, device, opt=None):
             pitch_logits, string_logits, fret_logits = preds
             correct['pitch'] += (pitch_logits.argmax(dim=1) == pitch_t).sum().item()
             correct['string'] += (string_logits.argmax(dim=1) == string_t).sum().item()
-            correct['fret'] += (fret_logits.argmax(dim=1) == fret_t).sum().item()
+            correct['fret']   += (fret_logits.argmax(dim=1)   == fret_t).sum().item()
 
     avg_loss = total_loss / total
     accuracy = {k: v / total for k, v in correct.items()}
@@ -55,7 +55,7 @@ def run_epoch(model, loader, device, opt=None):
 
 
 def train_crnn(checkpoint_dir, epochs=50, batch_size=32, lr=1e-3,
-                patience=5, num_workers=2, project="fretnet", run_name="crnn-run1"):
+                patience=5, num_workers=2):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("device:", device)
@@ -71,12 +71,10 @@ def train_crnn(checkpoint_dir, epochs=50, batch_size=32, lr=1e-3,
     model = CRNN().to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
 
-    wandb.init(project=project, name=run_name, config={
-        "epochs": epochs, "batch_size": batch_size, "lr": lr,
-        "patience": patience, "model": "CRNN",
-    })
-
     os.makedirs(checkpoint_dir, exist_ok=True)
+    log_path = os.path.join(checkpoint_dir, "training_log.csv")
+    log_rows = []
+
     best_val_loss = float("inf")
     best_state = None
     epochs_no_improve = 0
@@ -87,39 +85,3 @@ def train_crnn(checkpoint_dir, epochs=50, batch_size=32, lr=1e-3,
 
         print(f"epoch {epoch}: train_loss={train_loss:.3f}  val_loss={val_loss:.3f}  "
               f"val_acc string/fret/pitch = {val_acc['string']:.1%}/{val_acc['fret']:.1%}/{val_acc['pitch']:.1%}")
-
-        wandb.log({
-            "epoch": epoch, "train_loss": train_loss, "val_loss": val_loss,
-            "val_acc_string": val_acc['string'],
-            "val_acc_fret": val_acc['fret'],
-            "val_acc_pitch": val_acc['pitch'],
-        })
-
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            best_state = copy.deepcopy(model.state_dict())
-            epochs_no_improve = 0
-            ckpt_path = os.path.join(checkpoint_dir, "crnn_best.pt")
-            torch.save({
-                "epoch": epoch,
-                "model_state_dict": best_state,
-                "val_loss": val_loss,
-                "val_acc": val_acc,
-            }, ckpt_path)
-            print(f"NEW BEST====, saved to {ckpt_path}")
-        else:
-            epochs_no_improve += 1
-            print(f"NO IMPROVEMENT==== for {epochs_no_improve} epoch(s)")
-
-        if epochs_no_improve >= patience:
-            print(f"early stopping at epoch {epoch}")
-            break
-
-    wandb.finish()
-    if best_state is not None:
-        model.load_state_dict(best_state)
-    return model, best_val_loss
-
-
-if __name__ == "__main__":
-    train_crnn(checkpoint_dir="/content/drive/MyDrive/fretnet/checkpoints")
