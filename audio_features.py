@@ -3,7 +3,7 @@ import mirdata
 import librosa
 import numpy as np
 from config import STRING_MIDI
-from labels import build_label_array, collapse_to_monophonic
+from labels import build_label_array, collapse_to_monophonic, stack_polyphonic_labels
 
 
 def get_mirdata_dataset():
@@ -12,6 +12,13 @@ def get_mirdata_dataset():
 
 def get_solo_track_ids(mirdata_dataset):
     return [t for t in mirdata_dataset.track_ids if '_solo' in t]
+
+def get_comp_track_ids(mirdata_dataset):
+    return [t for t in mirdata_dataset.track_ids if '_comp' in t]
+
+def get_all_track_ids(mirdata_dataset):
+    # solo AND comp - comp is where the chords/strumming live
+    return list(mirdata_dataset.track_ids)
 
 def process_track(track_id, dataset, string_midi, sr=22050, hop_length=512):
     track = dataset.track(track_id)
@@ -27,22 +34,16 @@ def process_track(track_id, dataset, string_midi, sr=22050, hop_length=512):
         for s, open_midi in string_midi.items()
     }
 
-    labels = collapse_to_monophonic(label_arrays, string_midi)
-    # cqt is the X input labels is the Y input
-    return cqt, labels
+    poly_labels = stack_polyphonic_labels(label_arrays, string_midi)
+    # cqt is the X input, poly_labels (6, n_frames) is the Y input
+    return cqt, poly_labels
 
 
 if __name__ == "__main__":
     mirdata_dataset = get_mirdata_dataset()
-    print(dir(mirdata_dataset))
-    solo_ids = get_solo_track_ids(mirdata_dataset)
-    print(len(solo_ids), "solo out of", len(mirdata_dataset.track_ids))
+    all_ids = get_all_track_ids(mirdata_dataset)
+    print(len(all_ids), "total tracks")
 
-    # cqt, labels = process_track('05_Jazz3-137-Eb_solo', mirdata_dataset, STRING_MIDI)
-    # print(len(labels['frame_idx']), "monophonic frames out of", cqt.shape[1])
-
-    # i = np.where(labels['frame_idx'] == 32)[0][0]
-    # print(labels['string_idx'][i], labels['fret'][i], labels['pitch'][i])
-
-
-
+    cqt, poly_labels = process_track(all_ids[0], mirdata_dataset, STRING_MIDI)
+    print("cqt shape:", cqt.shape)
+    print("poly_labels shape:", poly_labels.shape)

@@ -48,3 +48,16 @@ def collapse_to_monophonic(label_arrays, string_midi):
         'fret': fret_per_frame[valid_frames],
         'pitch': pitch_per_frame[valid_frames],
     }
+
+
+def stack_polyphonic_labels(label_arrays, string_midi, not_played_class=20):
+    """
+    no filtering, returns one class index per string per frame instead of collapsing to a single note
+    """
+    strings_order = list(string_midi.keys())
+    # (6, n_frames)
+    stacked = np.stack([label_arrays[s] for s in strings_order])  
+
+    poly_labels = np.where(stacked == -1, not_played_class, stacked)
+    # (6, n_frames)
+    return poly_labels  
