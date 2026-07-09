@@ -1,25 +1,16 @@
 import os
 import glob
 import numpy as np
-from sklearn.model_selection import train_test_split
+from collections import defaultdict
 from torch.utils.data import ConcatDataset
 from dataset import GuitarSetDataset
-from config import MIN_MIDI, N_PITCH_CLASSES
 
 CACHE_DIR = 'data/processed'
 
+
 def load_cached_track(npz_path):
     data = np.load(npz_path)
-    labels = {
-        'frame_idx': data['frame_idx'],
-        'string_idx': data['string_idx'],
-        'fret': data['fret'],
-        'pitch': data['pitch'] - MIN_MIDI,
-    }
-    assert labels['pitch'].min() >= 0 and labels['pitch'].max() < N_PITCH_CLASSES, \
-        f"pitch out of range in {npz_path}"
-    
-    return data['cqt'], labels
+    return data['cqt'], data['poly_labels']
 
 
 def build_concat_dataset(npz_paths):
@@ -27,11 +18,25 @@ def build_concat_dataset(npz_paths):
     return ConcatDataset(datasets=datasets)
 
 
-def get_train_val_datasets(val_fraction=0.2, seed=2):
+def get_player_id(npz_path):
+    # GuitarSet filenames start with a 2-digit player number, e.g. "00_BN1-129-Eb_comp.npz"
+    return os.path.basename(npz_path)[:2]
+
+
+def get_train_val_datasets(val_player='05'):
+    # split data based on guitar player
     npz_paths = sorted(glob.glob(os.path.join(CACHE_DIR, '*.npz')))
     assert len(npz_paths) > 0, "No cached tracks found, EMPTY"
 
-    # shuffle here because CQT between tracks share zero overlap 
-    train_paths, val_paths = train_test_split(npz_paths, test_size=val_fraction, random_state=seed)
+    by_player = defaultdict(list)
+    for p in npz_paths:
+        by_player[get_player_id(p)].append(p)
+
+    print("tracks per player:", {k: len(v) for k, v in sorted(by_player.items())})
+
+    val_paths = by_player.pop(val_player)
+    train_paths = [p for paths in by_player.values() for p in paths]
+
+    print(f"train: {len(train_paths)} tracks, val (player {val_player}): {len(val_paths)} tracks")
 
     return build_concat_dataset(train_paths), build_concat_dataset(val_paths)
