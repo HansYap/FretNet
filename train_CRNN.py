@@ -1,6 +1,7 @@
 import os
 import csv
 import copy
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -12,14 +13,34 @@ from config import NOT_PLAYED_CLASS
 NOT_PLAYED = NOT_PLAYED_CLASS
 
 
-def combined_loss(preds, targets):
+def compute_class_weights(train_ds, device):
+    """
+    Counts how many string-frame slots are real notes vs 'not played' across
+    the whole training set, and builds a weight so a missed note costs the loss more than a missed silence does
+    """
+    counts = np.zeros(21, dtype=np.int64)
+    for ds in train_ds.datasets:
+        for s in range(6):
+            counts += np.bincount(ds.poly_labels[s], minlength=21)
+
+    active_total = counts[:20].sum()
+    not_played_total = counts[NOT_PLAYED]
+    weight = np.ones(21, dtype=np.float32)
+    weight[NOT_PLAYED] = active_total / not_played_total
+
+    print(f"class balance: {not_played_total} not-played vs {active_total} active "
+          f"-> not-played loss weight = {weight[NOT_PLAYED]:.3f}", flush=True)
+    return torch.tensor(weight, device=device)
+
+
+def combined_loss(preds, targets, class_weight=None):
     # preds: (batch, 6, 21), targets: (batch, 6)
     logits = preds.reshape(-1, preds.size(-1))  # (batch*6, 21)
     labels = targets.reshape(-1)                 # (batch*6,)
-    return F.cross_entropy(logits, labels)
+    return F.cross_entropy(logits, labels, weight=class_weight)
 
 
-def run_epoch(model, loader, device, opt=None):
+def run_epoch(model, loader, device, opt=None, class_weight=None):
     is_train = opt is not None
     model.train() if is_train else model.eval()
 
@@ -36,7 +57,9 @@ def run_epoch(model, loader, device, opt=None):
                 opt.zero_grad()
 
             preds = model(x)  # (batch, 6, 21)
-            loss = combined_loss(preds, label_vec)
+            # only weight the training loss, keep val_loss on the same
+            # unweighted scale so it's comparable across runs
+            loss = combined_loss(preds, label_vec, class_weight if is_train else None)
 
             if is_train:
                 loss.backward()
@@ -51,11 +74,10 @@ def run_epoch(model, loader, device, opt=None):
             overall_correct += correct_mask.sum().item()
             overall_total += correct_mask.numel()
 
-            # only count it where a string is actually being played
             active_mask = label_vec != NOT_PLAYED
             active_correct += (correct_mask & active_mask).sum().item()
             active_total += active_mask.sum().item()
-    # two types of accuracy since a model logging all strings as not played in a imbalanced data instance can carry false negatives (actually played strings)
+
     avg_loss = total_loss / total
     overall_acc = overall_correct / overall_total
     active_acc = active_correct / active_total if active_total > 0 else 0.0
@@ -63,13 +85,16 @@ def run_epoch(model, loader, device, opt=None):
 
 
 def train_crnn(checkpoint_dir, epochs=50, batch_size=32, lr=1e-3,
-                patience=5, num_workers=2, weight_decay=1e-3, dropout=0.3):
+                patience=5, num_workers=2, weight_decay=1e-3, dropout=0.3,
+                use_class_weight=True):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("device:", device, flush=True)
 
     train_ds, val_ds = get_train_val_datasets()
     print(f"train windows: {len(train_ds)}, val windows: {len(val_ds)}", flush=True)
+
+    class_weight = compute_class_weights(train_ds, device) if use_class_weight else None
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
                                num_workers=num_workers, pin_memory=True)
@@ -88,8 +113,8 @@ def train_crnn(checkpoint_dir, epochs=50, batch_size=32, lr=1e-3,
     epochs_no_improve = 0
 
     for epoch in range(epochs):
-        train_loss, train_overall_acc, train_active_acc = run_epoch(model, train_loader, device, opt)
-        val_loss, val_overall_acc, val_active_acc = run_epoch(model, val_loader, device, opt=None)
+        train_loss, train_overall_acc, train_active_acc = run_epoch(model, train_loader, device, opt, class_weight)
+        val_loss, val_overall_acc, val_active_acc = run_epoch(model, val_loader, device, opt=None, class_weight=class_weight)
 
         print(f"epoch {epoch}: train_loss={train_loss:.3f}  val_loss={val_loss:.3f}  "
               f"val_acc overall/active-string = {val_overall_acc:.1%}/{val_active_acc:.1%}",
@@ -100,7 +125,6 @@ def train_crnn(checkpoint_dir, epochs=50, batch_size=32, lr=1e-3,
             "val_acc_overall": val_overall_acc,
             "val_acc_active_string": val_active_acc,
         })
-        # rewrite the whole CSV each epoch in case disconnected from colab
         with open(log_path, 'w', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=log_rows[0].keys())
             writer.writeheader()
@@ -133,4 +157,4 @@ def train_crnn(checkpoint_dir, epochs=50, batch_size=32, lr=1e-3,
 
 
 if __name__ == "__main__":
-    train_crnn(checkpoint_dir="/content/drive/MyDrive/fretnet/checkpoints")
+    train_crnn(checkpoint_dir="/content/drive/MyDrive/FretNet/checkpoints")
