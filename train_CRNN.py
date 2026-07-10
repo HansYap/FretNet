@@ -7,14 +7,16 @@ from torch.utils.data import DataLoader
 
 from model import CRNN
 from dataset_setup import get_train_val_datasets
+from config import NOT_PLAYED_CLASS
+
+NOT_PLAYED = NOT_PLAYED_CLASS
 
 
 def combined_loss(preds, targets):
-    pitch_logits, string_logits, fret_logits = preds
-    pitch_t, string_t, fret_t = targets
-    return (F.cross_entropy(pitch_logits, pitch_t)
-            + F.cross_entropy(string_logits, string_t)
-            + F.cross_entropy(fret_logits, fret_t))
+    # preds: (batch, 6, 21), targets: (batch, 6)
+    logits = preds.reshape(-1, preds.size(-1))  # (batch*6, 21)
+    labels = targets.reshape(-1)                 # (batch*6,)
+    return F.cross_entropy(logits, labels)
 
 
 def run_epoch(model, loader, device, opt=None):
@@ -22,20 +24,19 @@ def run_epoch(model, loader, device, opt=None):
     model.train() if is_train else model.eval()
 
     total_loss, total = 0.0, 0
-    correct = {'pitch': 0, 'string': 0, 'fret': 0}
+    overall_correct, overall_total = 0, 0
+    active_correct, active_total = 0, 0
 
     with torch.set_grad_enabled(is_train):
-        for x, string_t, fret_t, pitch_t in loader:
+        for x, label_vec in loader:
             x = x.unsqueeze(1).float().to(device)
-            string_t = string_t.long().to(device)
-            fret_t = fret_t.long().to(device)
-            pitch_t = pitch_t.long().to(device)
+            label_vec = label_vec.long().to(device)  # (batch, 6)
 
             if is_train:
                 opt.zero_grad()
 
-            preds = model(x)
-            loss = combined_loss(preds, (pitch_t, string_t, fret_t))
+            preds = model(x)  # (batch, 6, 21)
+            loss = combined_loss(preds, label_vec)
 
             if is_train:
                 loss.backward()
@@ -44,14 +45,21 @@ def run_epoch(model, loader, device, opt=None):
             total_loss += loss.item() * x.size(0)
             total += x.size(0)
 
-            pitch_logits, string_logits, fret_logits = preds
-            correct['pitch'] += (pitch_logits.argmax(dim=1) == pitch_t).sum().item()
-            correct['string'] += (string_logits.argmax(dim=1) == string_t).sum().item()
-            correct['fret']   += (fret_logits.argmax(dim=1)   == fret_t).sum().item()
+            pred_classes = preds.argmax(dim=-1)       # (batch, 6)
+            correct_mask = (pred_classes == label_vec)
 
+            overall_correct += correct_mask.sum().item()
+            overall_total += correct_mask.numel()
+
+            # only count it where a string is actually being played
+            active_mask = label_vec != NOT_PLAYED
+            active_correct += (correct_mask & active_mask).sum().item()
+            active_total += active_mask.sum().item()
+    # two types of accuracy since a model logging all strings as not played in a imbalanced data instance can carry false negatives (actually played strings)
     avg_loss = total_loss / total
-    accuracy = {k: v / total for k, v in correct.items()}
-    return avg_loss, accuracy
+    overall_acc = overall_correct / overall_total
+    active_acc = active_correct / active_total if active_total > 0 else 0.0
+    return avg_loss, overall_acc, active_acc
 
 
 def train_crnn(checkpoint_dir, epochs=50, batch_size=32, lr=1e-3,
@@ -80,18 +88,17 @@ def train_crnn(checkpoint_dir, epochs=50, batch_size=32, lr=1e-3,
     epochs_no_improve = 0
 
     for epoch in range(epochs):
-        train_loss, _ = run_epoch(model, train_loader, device, opt)
-        val_loss, val_acc = run_epoch(model, val_loader, device, opt=None)
+        train_loss, train_overall_acc, train_active_acc = run_epoch(model, train_loader, device, opt)
+        val_loss, val_overall_acc, val_active_acc = run_epoch(model, val_loader, device, opt=None)
 
         print(f"epoch {epoch}: train_loss={train_loss:.3f}  val_loss={val_loss:.3f}  "
-              f"val_acc string/fret/pitch = {val_acc['string']:.1%}/{val_acc['fret']:.1%}/{val_acc['pitch']:.1%}",
+              f"val_acc overall/active-string = {val_overall_acc:.1%}/{val_active_acc:.1%}",
               flush=True)
 
         log_rows.append({
             "epoch": epoch, "train_loss": train_loss, "val_loss": val_loss,
-            "val_acc_string": val_acc['string'],
-            "val_acc_fret": val_acc['fret'],
-            "val_acc_pitch": val_acc['pitch'],
+            "val_acc_overall": val_overall_acc,
+            "val_acc_active_string": val_active_acc,
         })
         # rewrite the whole CSV each epoch in case disconnected from colab
         with open(log_path, 'w', newline='') as f:
@@ -108,7 +115,8 @@ def train_crnn(checkpoint_dir, epochs=50, batch_size=32, lr=1e-3,
                 "epoch": epoch,
                 "model_state_dict": best_state,
                 "val_loss": val_loss,
-                "val_acc": val_acc,
+                "val_acc_overall": val_overall_acc,
+                "val_acc_active_string": val_active_acc,
             }, ckpt_path)
             print(f"NEW BEST=== saved to {ckpt_path}", flush=True)
         else:

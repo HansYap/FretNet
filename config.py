@@ -6,3 +6,4 @@ hop_length = 512
 
 MIN_MIDI = 40
 N_PITCH_CLASSES = 60
+NOT_PLAYED_CLASS = 20
