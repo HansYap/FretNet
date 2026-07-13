@@ -12,36 +12,43 @@ from config import NOT_PLAYED_CLASS
 
 NOT_PLAYED = NOT_PLAYED_CLASS
 
+
 STRINGS_ORDER = ['E', 'A', 'D', 'G', 'B', 'e']
 
 MISS_RATE_BY_STRING = {'E': 29.7, 'A': 17.4, 'D': 18.9, 'G': 20.4, 'B': 38.3, 'e': 47.7}
 
+BOOSTED_STRINGS = {'B', 'e'}
+
 
 def compute_class_weights(train_ds, device):
-
-    mean_miss = np.mean(list(MISS_RATE_BY_STRING.values()))
-    active_boost = {s: MISS_RATE_BY_STRING[s] / mean_miss for s in STRINGS_ORDER}
-
-    weight = np.ones((6, 21), dtype=np.float32)
-    for s_idx, s_name in enumerate(STRINGS_ORDER):
+    
+    not_played_total = 0
+    active_total = 0
+    for s_idx in range(6):
         counts = np.zeros(21, dtype=np.int64)
         for ds in train_ds.datasets:
             counts += np.bincount(ds.poly_labels[s_idx], minlength=21)
+        not_played_total += counts[NOT_PLAYED]
+        active_total += counts[:20].sum()
 
-        active_total = counts[:20].sum()
-        not_played_total = counts[NOT_PLAYED]
-        weight[s_idx, NOT_PLAYED] = active_total / not_played_total
-        weight[s_idx, :20] *= active_boost[s_name]
+    global_not_played_weight = active_total / not_played_total
+    mean_miss = np.mean(list(MISS_RATE_BY_STRING.values()))
 
-        print(f"{s_name}: {not_played_total} not-played vs {active_total} active -> "
-              f"not-played weight={weight[s_idx, NOT_PLAYED]:.3f}, "
-              f"active-class boost={active_boost[s_name]:.3f}", flush=True)
+    weight = np.ones((6, 21), dtype=np.float32)
+    weight[:, NOT_PLAYED] = global_not_played_weight
+    for s_idx, s_name in enumerate(STRINGS_ORDER):
+        if s_name in BOOSTED_STRINGS:
+            weight[s_idx, :20] = MISS_RATE_BY_STRING[s_name] / mean_miss
+
+    print(f"global not-played weight (matches run 3): {global_not_played_weight:.3f}", flush=True)
+    for s_idx, s_name in enumerate(STRINGS_ORDER):
+        print(f"  {s_name}: not-played weight={weight[s_idx, NOT_PLAYED]:.3f}, "
+              f"active-class weight={weight[s_idx, 0]:.3f}", flush=True)
 
     return torch.tensor(weight, device=device)
 
 
 def combined_loss(preds, targets, class_weight=None):
-    
     losses = []
     for s in range(preds.size(1)):
         w = class_weight[s] if class_weight is not None else None
