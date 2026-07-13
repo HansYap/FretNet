@@ -12,32 +12,41 @@ from config import NOT_PLAYED_CLASS
 
 NOT_PLAYED = NOT_PLAYED_CLASS
 
+STRINGS_ORDER = ['E', 'A', 'D', 'G', 'B', 'e']
+
+MISS_RATE_BY_STRING = {'E': 29.7, 'A': 17.4, 'D': 18.9, 'G': 20.4, 'B': 38.3, 'e': 47.7}
+
 
 def compute_class_weights(train_ds, device):
-    """
-    Counts how many string-frame slots are real notes vs 'not played' across
-    the whole training set, and builds a weight so a missed note costs the loss more than a missed silence does
-    """
-    counts = np.zeros(21, dtype=np.int64)
-    for ds in train_ds.datasets:
-        for s in range(6):
-            counts += np.bincount(ds.poly_labels[s], minlength=21)
 
-    active_total = counts[:20].sum()
-    not_played_total = counts[NOT_PLAYED]
-    weight = np.ones(21, dtype=np.float32)
-    weight[NOT_PLAYED] = active_total / not_played_total
+    mean_miss = np.mean(list(MISS_RATE_BY_STRING.values()))
+    active_boost = {s: MISS_RATE_BY_STRING[s] / mean_miss for s in STRINGS_ORDER}
 
-    print(f"class balance: {not_played_total} not-played vs {active_total} active "
-          f"-> not-played loss weight = {weight[NOT_PLAYED]:.3f}", flush=True)
+    weight = np.ones((6, 21), dtype=np.float32)
+    for s_idx, s_name in enumerate(STRINGS_ORDER):
+        counts = np.zeros(21, dtype=np.int64)
+        for ds in train_ds.datasets:
+            counts += np.bincount(ds.poly_labels[s_idx], minlength=21)
+
+        active_total = counts[:20].sum()
+        not_played_total = counts[NOT_PLAYED]
+        weight[s_idx, NOT_PLAYED] = active_total / not_played_total
+        weight[s_idx, :20] *= active_boost[s_name]
+
+        print(f"{s_name}: {not_played_total} not-played vs {active_total} active -> "
+              f"not-played weight={weight[s_idx, NOT_PLAYED]:.3f}, "
+              f"active-class boost={active_boost[s_name]:.3f}", flush=True)
+
     return torch.tensor(weight, device=device)
 
 
 def combined_loss(preds, targets, class_weight=None):
-    # preds: (batch, 6, 21), targets: (batch, 6)
-    logits = preds.reshape(-1, preds.size(-1))  # (batch*6, 21)
-    labels = targets.reshape(-1)                 # (batch*6,)
-    return F.cross_entropy(logits, labels, weight=class_weight)
+    
+    losses = []
+    for s in range(preds.size(1)):
+        w = class_weight[s] if class_weight is not None else None
+        losses.append(F.cross_entropy(preds[:, s, :], targets[:, s], weight=w))
+    return torch.stack(losses).mean()
 
 
 def run_epoch(model, loader, device, opt=None, class_weight=None):
