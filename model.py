@@ -5,7 +5,7 @@ from config import N_PITCH_CLASSES
 
 class CRNN(nn.Module):
     def __init__(self, n_bins=96, n_strings=6, n_frets=20, dropout=0.3,
-                 gru_hidden=128):
+                 gru_hidden=96):
         super().__init__()
         # frets 0-19, plus one extra class for "not played" -> 21 classes per string
         self.n_classes_per_string = n_frets + 1
